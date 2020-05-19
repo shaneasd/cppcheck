@@ -87,7 +87,41 @@ namespace {
             return "";
         }
 
+        std::string parseAddonInfo(const picojson::value &json, const std::string &fileName, const std::string &exename) {
+            std::string json_error = picojson::get_last_error();
+            if (!json_error.empty()) {
+                return "Loading " + fileName + " failed. " + json_error;
+            }
+            if (!json.is<picojson::object>())
+                return "Loading " + fileName + " failed. Bad json.";
+            picojson::object obj = json.get<picojson::object>();
+            if (obj.count("args")) {
+                if (!obj["args"].is<picojson::array>())
+                    return "Loading " + fileName + " failed. args must be array.";
+                for (const picojson::value &v : obj["args"].get<picojson::array>())
+                    args += " " + v.get<std::string>();
+            }
+
+            if (obj.count("python")) {
+                // Python was defined in the config file
+                if (obj["python"].is<picojson::array>()) {
+                    return "Loading " + fileName +" failed. python must not be an array.";
+                }
+                python = obj["python"].get<std::string>();
+            } else {
+                python = "";
+            }
+
+            return getAddonInfo(obj["script"].get<std::string>(), exename);
+        }
+
         std::string getAddonInfo(const std::string &fileName, const std::string &exename) {
+            if (fileName[0] == '{') {
+                std::istringstream in(fileName);
+                picojson::value json;
+                in >> json;
+                return parseAddonInfo(json, fileName, exename);
+            }
             if (fileName.find(".") == std::string::npos)
                 return getAddonInfo(fileName + ".py", exename);
 
@@ -117,33 +151,17 @@ namespace {
                 return "Failed to open " + fileName;
             picojson::value json;
             fin >> json;
-            std::string json_error = picojson::get_last_error();
-            if (!json_error.empty()) {
-                return "Loading " + fileName + " failed. " + json_error;
-            }
-            if (!json.is<picojson::object>())
-                return "Loading " + fileName + " failed. Bad json.";
-            picojson::object obj = json.get<picojson::object>();
-            if (obj.count("args")) {
-                if (!obj["args"].is<picojson::array>())
-                    return "Loading " + fileName + " failed. args must be array.";
-                for (const picojson::value &v : obj["args"].get<picojson::array>())
-                    args += " " + v.get<std::string>();
-            }
-
-            if (obj.count("python")) {
-                // Python was defined in the config file
-                if (obj["python"].is<picojson::array>()) {
-                    return "Loading " + fileName +" failed. python must not be an array.";
-                }
-                python = obj["python"].get<std::string>();
-            } else {
-                python = "";
-            }
-
-            return getAddonInfo(obj["script"].get<std::string>(), exename);
+            return parseAddonInfo(json, fileName, exename);
         }
     };
+}
+
+static std::string cmdFileName(std::string f)
+{
+    //f = Path::toNativeSeparators(f);
+    if (f.find(" ") != std::string::npos)
+        return "\"" + f + "\"";
+    return f;
 }
 
 static std::string executeAddon(const AddonInfo &addonInfo,
@@ -151,33 +169,45 @@ static std::string executeAddon(const AddonInfo &addonInfo,
                                 const std::string &dumpFile)
 {
 
-    std::string pythonExe = (addonInfo.python != "") ? addonInfo.python : defaultPythonExe;
-
-    if (pythonExe.find(" ") != std::string::npos) {
-        // popen strips the first quote. Needs 2 sets to fully quote.
-        pythonExe = "\"\"" + pythonExe + "\"\"";
-    }
+    std::string pythonExe;
 
     // Can python be executed?
-    {
+    const int lastTest = 3;
+    for (int test = 1; test <= lastTest; ++test) {
+        if (test == 1 || test == lastTest)
+            pythonExe = cmdFileName((addonInfo.python != "") ? addonInfo.python : defaultPythonExe);
+        else
+            pythonExe = "python3";
+
         const std::string cmd = pythonExe + " --version 2>&1";
 
 #ifdef _WIN32
+        if (pythonExe.find(" ") != std::string::npos) {
+            // popen strips the first quote. Needs 2 sets to fully quote.
+            pythonExe = "\"" + pythonExe + "\"";
+        }
+
         std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd.c_str(), "r"), _pclose);
 #else
         std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
 #endif
-        if (!pipe)
+        if (!pipe) {
+            if (test < lastTest)
+                continue;
             throw InternalError(nullptr, "popen failed (command: '" + cmd + "')");
+        }
         char buffer[1024];
         std::string result;
         while (fgets(buffer, sizeof(buffer), pipe.get()) != nullptr)
             result += buffer;
-        if (result.compare(0, 7, "Python ", 0, 7) != 0 || result.size() > 50)
+        if (result.compare(0, 7, "Python ", 0, 7) != 0 || result.size() > 50) {
+            if (test < lastTest)
+                continue;
             throw InternalError(nullptr, "Failed to execute '" + cmd + "' (" + result + ")");
+        }
     }
 
-    const std::string cmd = pythonExe + " \"" + addonInfo.scriptFile + "\" --cli" + addonInfo.args + " \"" + dumpFile + "\" 2>&1";
+    const std::string cmd = pythonExe + " " + cmdFileName(addonInfo.scriptFile) + " --cli" + addonInfo.args + " " + cmdFileName(dumpFile) + " 2>&1";
 
 #ifdef _WIN32
     std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd.c_str(), "r"), _pclose);
