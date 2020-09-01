@@ -1408,7 +1408,7 @@ void CheckOther::checkConstVariable()
             if (usedInAssignment)
                 continue;
         }
-        // Skip if we ever cast this variable to a non-const type
+        // Skip if we ever cast this variable to a pointer/reference to a non-const type
         {
             bool castToNonConst = [&]
                 {
@@ -1416,26 +1416,9 @@ void CheckOther::checkConstVariable()
                     {
                         if (tok->isCast())
                         {
-                            if (Token::simpleMatch(tok->previous(), ">"))
-                            {
-                                // dynamic_cast<X&>(y)
-                                //                 ^    we're at this operator
-                                bool castToConst = Token::simpleMatch(tok->previous()->link()->next(), "const");
-                                if (!castToConst)
-                                {
-                                    return true;
-                                }
-                            }
-                            else
-                            {
-                                // (X&)(y)
-                                // ^        we're at this operator
-                                bool castToConst = Token::simpleMatch(tok->next(), "const");
-                                if (!castToConst)
-                                {
-                                    return true;
-                                }
-                            }
+                            bool isConst = 0 != (tok->valueType()->constness & (1 << tok->valueType()->pointer));
+                            if (!isConst)
+                                return true;
                         }
                     }
                     return false;
