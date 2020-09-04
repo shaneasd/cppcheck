@@ -488,7 +488,7 @@ static void setTokenValue(Token* tok, const ValueFlow::Value &value, const Setti
 
     // cast..
     if (const Token *castType = getCastTypeStartToken(parent)) {
-        if (astIsPointer(tok) && value.valueType == ValueFlow::Value::INT &&
+        if (((tok->valueType() == nullptr && value.isImpossible()) || astIsPointer(tok)) && value.valueType == ValueFlow::Value::INT &&
             Token::simpleMatch(parent->astOperand1(), "dynamic_cast"))
             return;
         const ValueType &valueType = ValueType::parseDecl(castType, settings);
@@ -3063,7 +3063,7 @@ std::vector<LifetimeToken> getLifetimeTokens(const Token* tok, ValueFlow::Value:
                 }
             }
             return result;
-        } else if (Token::Match(tok->tokAt(-2), ". %name% (") && astIsContainer(tok->tokAt(-2)->astOperand1())) {
+        } else if (Token::Match(tok->tokAt(-2), ". %name% (") && tok->tokAt(-2)->originalName() != "->" && astIsContainer(tok->tokAt(-2)->astOperand1())) {
             const Library::Container* library = getLibraryContainer(tok->tokAt(-2)->astOperand1());
             Library::Container::Yield y = library->getYield(tok->previous()->str());
             if (y == Library::Container::Yield::AT_INDEX || y == Library::Container::Yield::ITEM) {
